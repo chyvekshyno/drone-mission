@@ -9,16 +9,12 @@ dest_alt = 100
 
 drone = utils.connect_vehicle()
 
-drone.arm_and_takeoff(dest_alt)
-time.sleep(3)
-
-drone.goto(
-    location=LocationGlobalRelative(lat=dest_lat, lon=dest_lon, alt=dest_alt),
-    speed=10,
-)
-time.sleep(3)
-
-drone.send_movement_cmd_yaw(heading=350)
+drone.arm()
+drone.take_off(dest_alt)
+drone.set_mode("ALT_HOLD")
+drone.goto_rc(LocationGlobalRelative(lat=dest_lat, lon=dest_lon, alt=dest_alt))
+time.sleep(1)
+drone.set_bearing(utils.deg2rad(350))
 time.sleep(5)
 
 drone.close()

@@ -1,4 +1,4 @@
-from typing import Any, Union
+from typing import Any, Union, List
 import time
 
 from dronekit import (
@@ -8,14 +8,15 @@ from dronekit import (
     connect,
 )
 from pymavlink import mavutil
-from .. import utils
+import utils
 
 
 class Drone(Vehicle):
     @classmethod
     def connect(cls, connection_string: str = "127.0.0.1:14551"):
-        drone = connect(connection_string, wait_ready=True)
-        return drone
+        vehicle = connect(connection_string, wait_ready=True)
+        vehicle.wait_for_alt
+        return cls(vehicle._handler)
 
     #
     def disconnect(self):
@@ -38,15 +39,32 @@ class Drone(Vehicle):
         if isinstance(mode, str):
             mode = VehicleMode(mode)
         self.mode = mode
-        while self.mode != VehicleMode("GUIDED"):
+        while self.mode != mode:
             print(f" > Entering {mode.name} mode...")
             time.sleep(1)
         print(f"Current MODE: {self.mode}")
 
-    #
-    def arm(self, mode):
-        self.groundspeed = 3
+    def channel_ovveride(self, channel, value):
+        self.channels.overrides[channel] = value
 
+    #
+    def set_roll(self, throttle: int):
+        self.channel_ovveride(channel="1", value=throttle)
+
+    #
+    def set_pitch(self, throttle: int):
+        self.channel_ovveride(channel="2", value=throttle)
+
+    #
+    def set_throttle(self, throttle: int):
+        self.channel_ovveride(channel="3", value=throttle)
+
+    #
+    def set_yaw(self, throttle: int):
+        self.channel_ovveride(channel="4", value=throttle)
+
+    #
+    def arm(self, mode: Union[str, VehicleMode] = VehicleMode("STABILIZE")):
         print("Basic pre-arm checks")
         while not self.is_armable:
             print(" Waiting for vehicle to initialise...")
@@ -63,25 +81,87 @@ class Drone(Vehicle):
         return
 
     #
-    def arm_and_takeoff(self, aTargetAltitude: float):
-        self.arm("GUIDED")
+    def take_off(self, aTargetAltitude: float):
+        print(f"---\nTAKING OFF! Target altitude: {aTargetAltitude}")
+        self.change_alt(aTargetAltitude)
+        return
 
-        print(f"TAKING OFF! Target altitude: {aTargetAltitude}")
+    #
+    def change_alt(self, altitude: float):
+        throttle = 1550
+        self.set_throttle(throttle)
+
+        while self.get_altitude() < altitude * 0.95:  # pyright: ignore
+            self.set_throttle(throttle)
+            time.sleep(1)
+            print(f"   Altitude: {self.get_altitude()}")
+        print("REACHED target altitude")
+
+        self.set_throttle(1500)
+        return
+
+    #
+    def arm_and_takeoff(
+        self,
+        aTargetAltitude: float,
+        mode: Union[str, VehicleMode] = VehicleMode("GUIDED"),
+    ):
+        self.arm(mode)
+
+        print(f"---\nTAKING OFF! Target altitude: {aTargetAltitude}")
         self.simple_takeoff(aTargetAltitude)
 
         # Wait until the vehicle reaches a required height
         req_alt = aTargetAltitude * 0.95
-        curr_alt = self.location.global_relative_frame.alt
-        while curr_alt <= req_alt:  # pyright: ignore
+        while self.get_altitude() <= req_alt:  # pyright: ignore
             time.sleep(1)
-            curr_alt = self.location.global_relative_frame.alt
-            print(f"   Altitude: {self.location.global_relative_frame.alt}")
+            print(f"  > Altitude: {self.get_altitude()}")
         print("REACHED target altitude")
+        return
+
+    def goto_rc(self, location: LocationGlobalRelative):
+        """
+        Go to next location using RC overrides.
+        Works for ALT_HOLD mode.
+        """
+        print(f"---\nGOTO next location ({location.lat},{location.lon})")
+        print(f"Drone location: ({self.get_location().lat},{self.get_location().lon})")
+
+        # set yaw to target
+        bearing = utils.get_bearing(self.get_location(), location)
+        self.set_bearing(bearing)
+        print(f"  > BEARING: {bearing}")
+
+        # calculates distance and time
+        dist = utils.calc_distance(
+            lat1=self.get_location().lat,
+            lon1=self.get_location().lon,
+            lat2=location.lat,
+            lon2=location.lon,
+        )
+        wait_time = 2 + utils.calc_estimated_time(dist=dist, speed=10)
+        print(f"  > Estimated distance: {dist}")
+        print(f"  > Estimated time: {wait_time}")
+        print("START MOVING")
+        # move forvard
+        for i in range(0, wait_time, 2):
+            self.set_pitch(500)
+            print(f"  > Location: ({self.get_location().lat, self.get_location().lon})")
+            print(f"  > Altitude: {self.get_altitude()}\n")
+            time.sleep(2)
+        print(f"Location ACHIVED ({self.get_location().lat},{self.get_location().lon})")
+
+        # stop moving forward
+        self.set_pitch(1500)
         return
 
     #
     def goto(self, location: LocationGlobalRelative, speed):
-        print(f"Go to next location ({location.lat},{location.lon})")
+        """
+        Go to location (lat, lon) using Vehicle.simple_goto method.
+        Works for GUIDED mode
+        """
+        print(f"---\nGOTO next location ({location.lat},{location.lon})")
         if location.alt is None:
             location.alt = self.get_altitude()
 
@@ -95,24 +175,20 @@ class Drone(Vehicle):
         )
         wait_time = 6 + utils.calc_estimated_time(dist=dist, speed=speed)
 
-        print(
-            f"Current location: ({self.get_location().lat},{self.get_location().lon})"
-        )
-        print(f"Estimated distance: {dist}")
-        print(f"Estimated time: {wait_time}")
+        print(f" - Location: ({self.get_location().lat},{self.get_location().lon})")
+        print(f" - Estimated distance: {dist}")
+        print(f" - Estimated time: {wait_time}")
 
         self.simple_goto(location=location, airspeed=speed)
 
         for i in range(0, wait_time, 2):
             print(
-                f"\n - current location: ({self.get_location().lat, self.get_location().lon}) "
+                f"\n - location: ({self.get_location().lat, self.get_location().lon})"
             )
-            print(f" - current altitude: {self.get_altitude()} ")
+            print(f" - altitude: {self.get_altitude()} ")
             time.sleep(2)
 
-        print(
-            f"The location is ACHIVED ({self.get_location().lat},{self.get_location().lon})"
-        )
+        print(f"Location ACHIVED ({self.get_location().lat},{self.get_location().lon})")
 
         return
 
@@ -121,12 +197,47 @@ class Drone(Vehicle):
         self.set_mode("LAND")
 
     #
+    def set_bearing(self, bearing):
+        # 1 = cw, -1 = ccw
+        PI = 3.14159265359
+        bearing2 = bearing > 0 and bearing or bearing + PI
+        curr_yaw = self.attitude.yaw + PI  # pyright: ignore
+        diff = curr_yaw - bearing2
+
+        if 0 < diff and diff < PI:
+            vec = -1
+        else:
+            vec = 1
+
+        print(f" - set YAW: {bearing}")
+
+        # rotate yaw
+        if vec > 0:
+            while curr_yaw < bearing2:  # pyright: ignore
+                self.set_yaw(1530)
+                print(f"\n   -> current YAW: {self.attitude.yaw}")
+                print(f"   -> settet YAW: {bearing2}")
+                time.sleep(1)
+                curr_yaw = self.attitude.yaw + PI  # pyright: ignore
+        else:
+            while curr_yaw > bearing2:  # pyright: ignore
+                self.set_yaw(1470)
+                print(f"\n   -> current YAW: {self.attitude.yaw}")
+                print(f"   -> settet YAW: {bearing2}")
+                curr_yaw = self.attitude.yaw + PI  # pyright: ignore
+                time.sleep(1)
+
+        # stop rotation yaw
+        self.set_yaw(1500)
+        return
+
+    #
     def send_movement_cmd_yaw(self, heading, relative=False):
         """Send cmd via mavlink to yaw drone
         :heading degrees to yaw the drone
         :relative
         """
-        print(" > Sending YAW movement command with heading: %f" % heading)
+        print(" >> Sending YAW movement command with heading: %f" % heading)
 
         speed = 0
         direction = 1  #  -1 ccw, 1 cw
@@ -162,7 +273,7 @@ class Drone(Vehicle):
         """
 
         print(
-            f" > Sending XYA movement command with x-velocity :{velocity_x}, y-velocity: {velocity_y}"
+            f" >> Sending XYA movement command with x-velocity :{velocity_x}, y-velocity: {velocity_y}"
         )
 
         msg = self.message_factory.set_position_target_local_ned_encode(
@@ -186,6 +297,15 @@ class Drone(Vehicle):
 
         self.send_mavlink(msg)
         return
+
+    #
+    def get_channels_state(self, channels: Union[List[str], None] = None) -> str:
+        if channels is None:
+            channels = [ch for _, ch in enumerate(self.channels)]
+        channels_state = "Drone's channels:"
+        for ch in channels:
+            channels_state += f"\n CH_{ch}: {self.channels[ch]}"
+        return channels_state
 
     #
     def get_state(self) -> str:

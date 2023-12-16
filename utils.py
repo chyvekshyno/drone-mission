@@ -1,8 +1,6 @@
 import argparse
-import time
 from math import atan2, cos, radians, sin, sqrt
 
-from dronekit import VehicleMode
 from modules.drone import Drone
 
 
@@ -25,44 +23,30 @@ def connect_vehicle() -> Drone:
 
     # We have a home location.
     print(f"\n Home location: {vehicle.home_location}")
-    return Drone(vehicle)
+    return vehicle
 
 
-def arm_and_takeoff(vehicle, alt_target):
-    print("Basic pre-arm checks:")
+def get_bearing(loc1, loc2):
+    """
+    Returns the bearing in radians between the two LocationGlobal objects passed as parameters.
+    """
+    dL = loc2.lon - loc1.lon
+    X = cos(loc2.lat) * sin(dL)
+    Y = cos(loc1.lat) * sin(loc2.lat) - sin(loc1.lat) * cos(loc2.lat) * cos(dL)
+    bearing = atan2(X, Y)
+    # if bearing < 0:
+    #     bearing += 6.28318530718
+    return bearing
 
-    vehicle.mode = VehicleMode("STABILIZE")
 
-    while not vehicle.is_armable:
-        print(" Waiting for vehicle to become armable...")
-        time.sleep(1)
-    print("Arming motors")
+def rad2deg(rad):
+    return rad * 57.2957795
 
-    vehicle.mode = VehicleMode("GUIDED")
-    while vehicle.mode != VehicleMode("GUIDED"):
-        print(" Waiting for entering GUIDED mode...")
-        print(f" current mode is {vehicle.mode}...")
-        time.sleep(1)
 
-    vehicle.armed = True
-    while not vehicle.armed:
-        print(" Waiting for arming...")
-        time.sleep(1)
-
-    time.sleep(3)
-    print("Taking off!")
-    vehicle.simple_takeoff(alt_target)  # Take off to target altitude
-
-    # Altitude
-    while True:
-        print(" Altitude: ", vehicle.location.global_relative_frame.alt)
-        if vehicle.location.global_relative_frame.alt >= alt_target * 0.95:
-            print("Reached target altitude")
-            break
-        time.sleep(1)
-
-    print(f" Target altitude={alt_target} reached")
-    return
+def deg2rad(deg):
+    if deg > 180:
+        deg = deg - 360
+    return deg / 57.2957795
 
 
 def calc_distance(lat1, lon1, lat2, lon2):
